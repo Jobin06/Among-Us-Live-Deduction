@@ -1,0 +1,406 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum UserRole {
+  PARTICIPANT
+  VOLUNTEER
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum ParticipantStatus {
+  REGISTERED
+  ACTIVE
+  DISQUALIFIED
+  WITHDRAWN
+
+  @@map("participant_status")
+}
+
+enum LobbyType {
+  PRELIMINARY
+  FINAL
+
+  @@map("lobby_type")
+}
+
+enum LobbyStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("lobby_status")
+}
+
+enum RoundType {
+  PRACTICE
+  PRELIMINARY
+  FINAL
+
+  @@map("round_type")
+}
+
+enum RoundStatus {
+  UPCOMING
+  ACTIVE
+  SCORING
+  COMPLETED
+  LOCKED
+
+  @@map("round_status")
+}
+
+enum PlayerRole {
+  CREWMATE
+  IMPOSTER
+
+  @@map("player_role")
+}
+
+enum RuleRole {
+  CREWMATE
+  IMPOSTER
+  ANY
+
+  @@map("rule_role")
+}
+
+enum RuleFieldType {
+  BOOLEAN
+  INTEGER
+
+  @@map("rule_field_type")
+}
+
+enum EventStatus {
+  NOT_STARTED
+  REGISTRATION
+  BRIEFING
+  PRACTICE
+  PRELIMINARY
+  RESULTS
+  FINAL
+  COMPLETED
+
+  @@map("event_status")
+}
+
+enum TieBreakMethod {
+  ADMIN_DECISION
+  FINAL_ROUND_SCORE
+  HEAD_TO_HEAD
+  ALL_QUALIFY
+
+  @@map("tie_break_method")
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  username     String    @unique @db.VarChar(100)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  role         UserRole
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  participant          Participant?
+  volunteer            Volunteer?
+  volunteerAssignments VolunteerAssignment[] @relation("VolunteerAssignedBy")
+  scoreEntriesEntered  ScoreEntry[]          @relation("ScoreEnteredBy")
+  scoreHistoriesChanged ScoreHistory[]       @relation("ScoreHistoryChangedBy")
+  announcementsCreated Announcement[]        @relation("AnnouncementCreatedBy")
+  auditLogs            AuditLog[]            @relation("AuditLogUser")
+
+  @@index([role])
+  @@map("users")
+}
+
+model Participant {
+  id              String            @id @default(uuid()) @db.Uuid
+  userId          String            @unique @map("user_id") @db.Uuid
+  participantId   String            @unique @map("participant_id") @db.VarChar(10)
+  name            String            @db.VarChar(100)
+  amongUsUsername String?           @map("among_us_username") @db.VarChar(50)
+  lobbyId         String?           @map("lobby_id") @db.Uuid
+  status          ParticipantStatus @default(REGISTERED)
+  createdAt       DateTime          @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime          @updatedAt @map("updated_at") @db.Timestamptz
+
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lobby             Lobby?             @relation(fields: [lobbyId], references: [id], onDelete: SetNull)
+  roundParticipants RoundParticipant[]
+  scoreEntries      ScoreEntry[]
+  qualification     Qualification?
+
+  @@index([lobbyId])
+  @@index([status])
+  @@map("participants")
+}
+
+model Volunteer {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  name      String   @db.VarChar(100)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments VolunteerAssignment[]
+
+  @@map("volunteers")
+}
+
+model VolunteerAssignment {
+  id           String   @id @default(uuid()) @db.Uuid
+  volunteerId  String   @map("volunteer_id") @db.Uuid
+  roundId      String   @map("round_id") @db.Uuid
+  lobbyId      String   @map("lobby_id") @db.Uuid
+  assignedById String   @map("assigned_by") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  volunteer  Volunteer @relation(fields: [volunteerId], references: [id], onDelete: Cascade)
+  round      Round     @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  lobby      Lobby     @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
+  assignedBy User      @relation("VolunteerAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict)
+
+  @@unique([volunteerId, roundId, lobbyId])
+  @@index([volunteerId])
+  @@index([roundId])
+  @@index([lobbyId])
+  @@map("volunteer_assignments")
+}
+
+model Lobby {
+  id        String      @id @default(uuid()) @db.Uuid
+  name      String      @unique @db.VarChar(50)
+  type      LobbyType   @default(PRELIMINARY)
+  capacity  Int?
+  status    LobbyStatus @default(ACTIVE)
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  participants         Participant[]
+  roundParticipants    RoundParticipant[]
+  volunteerAssignments VolunteerAssignment[]
+
+  @@index([type])
+  @@map("lobbies")
+}
+
+model Round {
+  id          String      @id @default(uuid()) @db.Uuid
+  name        String      @db.VarChar(100)
+  roundNumber Int         @map("round_number")
+  type        RoundType
+  status      RoundStatus @default(UPCOMING)
+  startsAt    DateTime?   @map("starts_at") @db.Timestamptz
+  endsAt      DateTime?   @map("ends_at") @db.Timestamptz
+  scoreLocked Boolean     @default(false) @map("score_locked")
+  isArchived  Boolean     @default(false) @map("is_archived")
+  createdAt   DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  roundParticipants    RoundParticipant[]
+  scoreEntries         ScoreEntry[]
+  volunteerAssignments VolunteerAssignment[]
+
+  @@index([type])
+  @@index([status])
+  @@index([isArchived])
+  @@map("rounds")
+}
+
+model RoundParticipant {
+  id            String   @id @default(uuid()) @db.Uuid
+  roundId       String   @map("round_id") @db.Uuid
+  participantId String   @map("participant_id") @db.Uuid
+  lobbyId       String   @map("lobby_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  round       Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  lobby       Lobby       @relation(fields: [lobbyId], references: [id], onDelete: Restrict)
+
+  @@unique([roundId, participantId])
+  @@index([roundId])
+  @@index([participantId])
+  @@index([lobbyId])
+  @@map("round_participants")
+}
+
+model ScoreEntry {
+  id                    String     @id @default(uuid()) @db.Uuid
+  roundId               String     @map("round_id") @db.Uuid
+  participantId         String     @map("participant_id") @db.Uuid
+  role                  PlayerRole
+  correctVote           Boolean    @default(false) @map("correct_vote")
+  correctIdentification Boolean    @default(false) @map("correct_identification")
+  tasksCompleted        Int        @default(0) @map("tasks_completed")
+  survived              Boolean    @default(false)
+  wonAsCrewmate         Boolean    @default(false) @map("won_as_crewmate")
+  wonAsImposter         Boolean    @default(false) @map("won_as_imposter")
+  successfulElimination Int        @default(0) @map("successful_elimination")
+  avoidedIdentification Boolean    @default(false) @map("avoided_identification")
+  votedOutAsImposter    Boolean    @default(false) @map("voted_out_as_imposter")
+  totalScore            Int        @map("total_score")
+  enteredById           String     @map("entered_by") @db.Uuid
+  createdAt             DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt             DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  round       Round          @relation(fields: [roundId], references: [id], onDelete: Restrict)
+  participant Participant    @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  enteredBy   User           @relation("ScoreEnteredBy", fields: [enteredById], references: [id], onDelete: Restrict)
+  history     ScoreHistory[]
+
+  @@unique([roundId, participantId])
+  @@index([roundId])
+  @@index([participantId])
+  @@index([enteredById])
+  @@map("score_entries")
+}
+
+model ScoreHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  scoreEntryId  String   @map("score_entry_id") @db.Uuid
+  version       Int      @default(1)
+  oldTotalScore Int?     @map("old_total_score")
+  newTotalScore Int      @map("new_total_score")
+  oldValues     Json?    @map("old_values")
+  newValues     Json     @map("new_values")
+  changedById   String   @map("changed_by") @db.Uuid
+  reason        String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  scoreEntry ScoreEntry @relation(fields: [scoreEntryId], references: [id], onDelete: Restrict)
+  changedBy  User       @relation("ScoreHistoryChangedBy", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@index([scoreEntryId])
+  @@index([changedById])
+  @@index([createdAt])
+  @@map("score_history")
+}
+
+model ScoringRule {
+  id             String        @id @default(uuid()) @db.Uuid
+  ruleKey        String        @unique @map("rule_key") @db.VarChar(50)
+  ruleName       String        @map("rule_name") @db.VarChar(100)
+  description    String?
+  points         Int
+  applicableRole RuleRole      @default(ANY) @map("applicable_role")
+  fieldType      RuleFieldType @default(BOOLEAN) @map("field_type")
+  isActive       Boolean       @default(true) @map("is_active")
+  sortOrder      Int           @default(0) @map("sort_order")
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([isActive])
+  @@map("scoring_rules")
+}
+
+model Qualification {
+  id               String   @id @default(uuid()) @db.Uuid
+  participantId    String   @unique @map("participant_id") @db.Uuid
+  preliminaryScore Int      @map("preliminary_score")
+  rank             Int
+  qualified        Boolean  @default(false)
+  isTieAtCutoff    Boolean  @default(false) @map("is_tie_at_cutoff")
+  adminOverride    Boolean  @default(false) @map("admin_override")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  participant Participant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+
+  @@index([qualified])
+  @@index([rank])
+  @@map("qualifications")
+}
+
+model Announcement {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String   @db.VarChar(200)
+  message     String
+  isActive    Boolean  @default(true) @map("is_active")
+  priority    Int      @default(0)
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdBy User @relation("AnnouncementCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([isActive])
+  @@index([createdAt])
+  @@map("announcements")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   String?  @map("entity_id") @db.Uuid
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  reason     String?
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation("AuditLogUser", fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([action])
+  @@index([entityType])
+  @@index([createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
+}
+
+model EventSetting {
+  id                       String         @id @default(uuid()) @db.Uuid
+  isSingleton              Boolean        @default(true) @unique @map("is_singleton")
+  eventName                String         @default("AMONG US: LIVE DEDUCTION") @map("event_name") @db.VarChar(200)
+  eventDescription         String?        @map("event_description")
+  eventDate                DateTime?      @map("event_date") @db.Date
+  eventStatus              EventStatus    @default(NOT_STARTED) @map("event_status")
+  venue                    String?        @db.VarChar(200)
+  eventStart               String?        @default("09:00") @map("event_start") @db.VarChar(10)
+  eventEnd                 String?        @default("12:00") @map("event_end") @db.VarChar(10)
+  qualificationCount       Int            @default(8) @map("qualification_count")
+  finalScoreFormula        String?        @map("final_score_formula") @db.VarChar(50)
+  preliminaryWeight        Decimal        @default(1.0) @map("preliminary_weight") @db.Decimal(5, 2)
+  finalWeight              Decimal        @default(1.0) @map("final_weight") @db.Decimal(5, 2)
+  resultsPublished         Boolean        @default(false) @map("results_published")
+  resultsLocked            Boolean        @default(false) @map("results_locked")
+  tieBreakMethod           TieBreakMethod @default(ADMIN_DECISION) @map("tie_break_method")
+  maxEliminationsPerRound  Int?           @map("max_eliminations_per_round")
+  createdAt                DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                DateTime       @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("event_settings")
+}
+
+model ScheduleItem {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @db.VarChar(100)
+  description String?
+  startTime   String   @map("start_time") @db.VarChar(10)
+  endTime     String   @map("end_time") @db.VarChar(10)
+  sortOrder   Int      @unique @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("schedule_items")
+}
